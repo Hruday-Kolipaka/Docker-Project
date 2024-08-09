@@ -1,0 +1,126 @@
+
+LAUNCH INSTANCE WITH T2.LARGE
+SETUP JENKINS
+INSTALL GIT 
+INSTALL TRIVY 
+
+ steps to install trivy:
+wget https://github.com/aquasecurity/trivy/releases/download/v0.18.3/trivy_0.18.3_Linux-64bit.tar.gz
+tar zxvf trivy_0.18.3_Linux-64bit.tar.gz
+sudo mv trivy /usr/local/bin/
+Vim .bashrc
+export PATH=$PATH:/usr/local/bin/
+source .bashrc  
+
+INSTALL DOCKER AND GIVE PERMISSIONS TO /VAR/RUN/DOCKER.SOCK
+CREATE A SONAR CONTAINER USING DOCKER  AND CONNECT TO SONARQUBE (docker run -d --name sonar -p 9000:9000 sonarqube:lts-community) 
+INSTALL THESE FOLLOWING PLUGINS (Eclipse Temurin Installer, SonarQube Scanner, NodeJs Plugin)
+
+Configure Java and Nodejs in Global Tool Configuration
+
+JDK NAME = jdk17 (idk-17.0.8.1+1)
+NODE NAME = node16 (NodeJs 16.2.0)
+
+Configure Sonar Server in Manage Jenkins
+CREATE A USER IN SONAR AND GENEARATE A TOKEN FOR THAT USER 
+ADD THESE TOKEN IN JENKINS CREDENTIALS 
+Now, go to Dashboard → Manage Jenkins → System and Add sonarqube and save it 
+
+Configure sonar in Global Tool Configuration
+SONAR NAME = sonar-scanner (SonarQube Scanner 5.0.1.3006)
+In the Sonarqube Dashboard add a quality gate also
+Administration → Configuration →Webhooks
+
+
+Install OWASP Dependency Check Plugins
+
+GotoDashboard → Manage Jenkins → Plugins → OWASP Dependency-Check. Click on it and install it without restart.
+First, we configured the Plugin and next, we had to configure the Tool
+Goto Dashboard → Manage Jenkins → Tools →
+Name: DP-Check (dependency-check 6.5.1) from github.com
+
+
+Install Docker pipeline plugin and store docker hub credentials 
+
+
+
+
+pipeline {
+    agent any
+    tools {
+        jdk 'jdk17'
+        nodejs 'node16'
+    }
+    environment {
+        SCANNER_HOME = tool 'mysonar'
+    }
+    stages {
+        stage ("clean WS") {
+            steps {
+                cleanWs ()
+            }
+        }
+        stage ("CODE") {
+            steps {
+                git "https://github.com/Hruday143/ZOMATO-PROJECT.git"
+            }
+        }
+        stage("Sonarqube Analysis") {
+            steps{
+                withSonarQubeEnv('mysonar') {
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=zomato \
+                    -Dsonar.projectKey=zomato '''
+                }
+            }
+        }
+        stage ("Quality Gates") {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
+                }
+            }
+        }
+        stage ("Install dependencies") {
+            steps {
+                sh 'npm install'
+            }
+        }
+        stage ("OWASP") {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'Dp-Check'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        stage ("Trivy scan") {
+            steps {
+                sh "trivy fs . > trivyfs.txt"
+            }
+        }
+        stage ("Build Dockerfile") {
+            steps {
+                sh 'docker build -t image1 .'
+            }
+        }
+        stage ("Docker Build and Push") {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'DockerHub-password') {
+                        sh "docker tag image1 hruday143/mydockerproject:myzomatoimage"
+                        sh "docker push hruday143/mydockerproject:myzomatoimage"
+                    }
+                }
+            }
+        }
+        stage ("Scan image") {
+            steps {
+                sh 'trivy image hruday143/mydockerproject:myzomatoimage'
+            }
+        }
+        stage ("Deploy") {
+            steps {
+                sh 'docker run -d --name zomato -p 3000:3000 hruday143/mydockerproject:myzomatoimage'
+            }
+        }
+
+    }
+}
